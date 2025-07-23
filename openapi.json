@@ -1,9 +1,9 @@
 {
   "openapi": "3.0.2",
   "info": {
-    "title": "CodePilotX API",
+    "title": "CodePilotX-CAD API",
     "version": "1.0.0",
-    "description": "OpenAPI schema for CodePilotX backend service."
+    "description": "OpenAPI schema for CodePilotX-CAD backend service."
   },
   "servers": [
     {
@@ -14,6 +14,7 @@
   "paths": {
     "/": {
       "get": {
+        "operationId": "getRoot",
         "summary": "Root Endpoint",
         "description": "Health check/root endpoint.",
         "responses": {
@@ -27,7 +28,7 @@
                     "msg": { "type": "string" }
                   }
                 },
-                "example": { "msg": "CodePilotX API is running. See /docs" }
+                "example": { "msg": "CodePilotX-CAD API is running. See /docs" }
               }
             }
           }
@@ -36,6 +37,7 @@
     },
     "/project/run": {
       "post": {
+        "operationId": "runProjectCommand",
         "summary": "Run a shell command",
         "requestBody": {
           "required": true,
@@ -63,6 +65,7 @@
     },
     "/project/upload": {
       "post": {
+        "operationId": "uploadFileRaw",
         "summary": "Upload a file (multipart)",
         "requestBody": {
           "required": true,
@@ -97,6 +100,7 @@
     },
     "/project/uploadjson": {
       "post": {
+        "operationId": "uploadFileJson",
         "summary": "Upload a file (JSON)",
         "requestBody": {
           "required": true,
@@ -124,6 +128,7 @@
     },
     "/project/getfile/{filename}": {
       "get": {
+        "operationId": "getFileContents",
         "summary": "Get file contents",
         "parameters": [
           {
@@ -149,6 +154,7 @@
     },
     "/project/download/{filename}": {
       "get": {
+        "operationId": "downloadFile",
         "summary": "Download a file",
         "parameters": [
           {
@@ -175,6 +181,7 @@
     },
     "/project/render_sample": {
       "get": {
+        "operationId": "renderSampleScad",
         "summary": "Render a sample SCAD file",
         "responses": {
           "200": {
