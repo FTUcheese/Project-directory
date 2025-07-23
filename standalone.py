@@ -49,15 +49,14 @@ def linear_regression_predict(data, point):
     y_pred = a * x_query + b
     return y_pred
 
-#unique name
+# Unique name
 
-# Increase homescreen icon count by 1 for "nah Id win"
-numberofIcons = [len(icons.iconFrames[0]) + 1] + [len(icons.iconFrames[i]) for i in range(1, len(icons.iconFrames))]
+ID = ubinascii.hexlify(machine.unique_id()).decode()
+numberofIcons = [len(icons.iconFrames[0]) + 1] + [len(icons.iconFrames[i]) for i in range(1, len(icons.iconFrames))]  # Homescreen +1 icon
 highlightedIcon = []
 for numberofIcon in numberofIcons:
     highlightedIcon.append([0, numberofIcon])
 
-ID = ubinascii.hexlify(machine.unique_id()).decode()
 screenID = 1
 lastPressed = 0
 previousIcon = 0
@@ -69,8 +68,9 @@ oldlocaltime = 0
 points = []
 
 # Defining all flags
-# flags
-flags = [False, False, False, False, False, False]  # 1 extra flag for the new icon
+# Make sure flags covers ALL icons on ALL screens!
+flags = [False for _ in range(max(numberofIcons))]
+
 playFlag = False
 triggered = False
 
@@ -129,17 +129,17 @@ def displayselect(selectedIcon):
     global previousIcon
 
     highlightedIcon[screenID][0] = (highlightedIcon[screenID][0] + selectedIcon) % highlightedIcon[screenID][1]
-    display.selector(screenID, highlightedIcon[screenID][0], previousIcon) #draw circle at selection position, and remove from the previousIconious position
+    display.selector(screenID, highlightedIcon[screenID][0], previousIcon)
     previousIcon = highlightedIcon[screenID][0]
     lastPressed = time.ticks_ms()
 
 def selectpressed():
-    # declare all global variables, include all flags
     global flags
     global triggered
     time.sleep(0.05)
+    # set the flag for the currently highlighted icon on this screen
     flags[highlightedIcon[screenID][0]] = True
-    triggered = True #log file
+    triggered = True
 
 def resettohome():
     global screenID
@@ -239,19 +239,16 @@ oldpoint = [-1, -1]
 
 while True:
     point = sens.readpoint()
-    #broadcast(point, screenID, highlightedIcon[screenID][0],ID)
 
-    # Homepage
-    # [fb_Train,fb_Play,fb_nahIdWin]
+    # Homescreen (screenID 0)
     if(screenID == 0):
-        if(flags[0]):
-            points = [] # empty the points array
+        if flags[0]:   # train
+            points = []
             screenID = 1
             clearscreen = True
-            display.graph(oldpoint, point, points, 0) #normal color
+            display.graph(oldpoint, point, points, 0)
             resetflags()
-
-        elif(flags[1]):
+        elif flags[1]:  # play
             screenID = 2
             clearscreen = True
             datapoints = readfile()
@@ -259,17 +256,16 @@ while True:
                 display.showmessage("No data saved")
                 resettohome()
             else:
-                display.graph(oldpoint, point, points, 0) #normal color
+                display.graph(oldpoint, point, points, 0)
             resetflags()
-        elif(flags[2]):  # New icon triggers "nah Id win" screen
+        elif flags[2]:  # new icon: "nah Id win"
             screenID = 5
             clearscreen = True
             resetflags()
 
     # Training Screen
-    # [fb_add,fb_delete,fb_smallplay,fb_home]
     elif(screenID == 1):
-        if(flags[0]): # Play button is pressed
+        if(flags[0]):  # Play button is pressed
             if (points):
                 playFlag = True
                 savetofile(points)
@@ -279,37 +275,38 @@ while True:
                 display.showmessage("NO DATA")
             resetflags()
 
-        elif(flags[1]): # add button is pressed
+        elif(flags[1]):  # add button is pressed
             points.append(list(point))
             display.graph(oldpoint, point, points, 0)
             shakemotor(point)
             resetflags()
 
-        elif(flags[2]): #delete button is pressed
-            if(points): #delete only when there is something
+        elif(flags[2]):  # delete button is pressed
+            if(points):
                 points.pop()
             display.cleargraph()
             display.graph(oldpoint, point, points, 0)
             resetflags()
 
-        if(playFlag): #only when point is different now
-            if(not point == oldpoint): #only when point is different now
+        if(playFlag):
+            if(not point == oldpoint):
                 x_point = point[0]
                 y_point = linear_regression_predict(points, point)
                 s.write_angle(int(y_point))
-                display.graph(oldpoint, (x_point, y_point), points, 1) #inverted color
+                display.graph(oldpoint, (x_point, y_point), points, 1)
                 oldpoint = (x_point, y_point)
 
         else:
-            if(not point == oldpoint): #only when point is different now
+            if(not point == oldpoint):
                 s.write_angle(point[1])
-                display.graph(oldpoint, point, points, 0) #normal color
+                display.graph(oldpoint, point, points, 0)
             oldpoint = point
 
+    # Add your extra screenID 5
     elif(screenID == 5):
         display.fill(0)
         display.showmessage("nah Id win")
-        # Return to homescreen on any button press
+        # Go back to home on any button press
         if any(flags):
             resettohome()
             resetflags()
