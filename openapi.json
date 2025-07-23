@@ -1,0 +1,266 @@
+{
+  "openapi": "3.0.2",
+  "info": {
+    "title": "CodePilotX API",
+    "version": "1.0.0",
+    "description": "OpenAPI schema for CodePilotX backend service."
+  },
+  "servers": [
+    {
+      "url": "https://codepilotx.onrender.com",
+      "description": "Render Public API"
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "Root Endpoint",
+        "description": "Health check/root endpoint.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "msg": { "type": "string" }
+                  }
+                },
+                "example": { "msg": "CodePilotX API is running. See /docs" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/project/run": {
+      "post": {
+        "summary": "Run a shell command",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command execution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/project/upload": {
+      "post": {
+        "summary": "Upload a file (multipart)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File upload result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileUploadResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/project/uploadjson": {
+      "post": {
+        "summary": "Upload a file (JSON)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File upload result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileUploadResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/project/getfile/{filename}": {
+      "get": {
+        "summary": "Get file contents",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileContentResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/project/download/{filename}": {
+      "get": {
+        "summary": "Download a file",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File download",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/project/render_sample": {
+      "get": {
+        "summary": "Render a sample SCAD file",
+        "responses": {
+          "200": {
+            "description": "SCAD file creation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderSampleResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "SolidPython not installed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "RunCommand": {
+        "type": "object",
+        "properties": {
+          "cmd": { "type": "string" }
+        },
+        "required": ["cmd"]
+      },
+      "UploadPayload": {
+        "type": "object",
+        "properties": {
+          "filename": { "type": "string" },
+          "content_b64": { "type": "string" },
+          "content": { "type": "string" },
+          "file": { "type": "string" }
+        },
+        "required": ["filename"]
+      },
+      "CommandResult": {
+        "type": "object",
+        "properties": {
+          "stdout": { "type": "string" },
+          "stderr": { "type": "string" },
+          "returncode": { "type": "integer" }
+        }
+      },
+      "FileUploadResponse": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "filepath": { "type": "string" },
+          "github": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string" },
+              "url": { "type": "string" },
+              "reason": { "type": "string" },
+              "detail": { "type": "string" }
+            }
+          }
+        }
+      },
+      "FileContentResponse": {
+        "type": "object",
+        "properties": {
+          "filename": { "type": "string" },
+          "content": { "type": "string" }
+        }
+      },
+      "RenderSampleResponse": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "path": { "type": "string" }
+        }
+      }
+    }
+  }
+}
