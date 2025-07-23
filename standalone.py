@@ -51,12 +51,13 @@ def linear_regression_predict(data, point):
 
 #unique name
 
-ID = ubinascii.hexlify(machine.unique_id()).decode()
-numberofIcons = [len(icons.iconFrames[i]) for i in range(len(icons.iconFrames))] #[homescreen, trainscreen, playscreen, playthefilesscreen, settingsscreen]
+# Increase homescreen icon count by 1 for "nah Id win"
+numberofIcons = [len(icons.iconFrames[0]) + 1] + [len(icons.iconFrames[i]) for i in range(1, len(icons.iconFrames))]
 highlightedIcon = []
 for numberofIcon in numberofIcons:
     highlightedIcon.append([0, numberofIcon])
 
+ID = ubinascii.hexlify(machine.unique_id()).decode()
 screenID = 1
 lastPressed = 0
 previousIcon = 0
@@ -69,7 +70,7 @@ points = []
 
 # Defining all flags
 # flags
-flags = [False, False, False, False, False]
+flags = [False, False, False, False, False, False]  # 1 extra flag for the new icon
 playFlag = False
 triggered = False
 
@@ -100,20 +101,6 @@ switch_up = Pin(10, Pin.IN)
 
 i2c = SoftI2C(scl=Pin(7), sda=Pin(6))
 display = icons.SSD1306_SMART(128, 64, i2c, switch_up)
-
-# highlightedIcon=[(ICON,TotalIcons),...]
-# screenID gives the SCREEN number I am at
-# SCREENID
-# 0 - HOMESCREEN
-# 1 - PlaySCREEN
-# 2 - TrainSCREEN
-# 3 - Playthefiles
-# 4 - ConnectSCREEN
-
-# highligtedIcons[screenID][0] which icon is highlighted on screenID screen
-# highligtedIcons[screenID][0] =1 # First Icon selected
-# highligtedIcons[screenID][0] =2 #Second
-# highligtedIcons[screenID][0] =3 #Third
 
 # interrupt functions
 
@@ -255,8 +242,7 @@ while True:
     #broadcast(point, screenID, highlightedIcon[screenID][0],ID)
 
     # Homepage
-    # [fb_Train,fb_Play]
-
+    # [fb_Train,fb_Play,fb_nahIdWin]
     if(screenID == 0):
         if(flags[0]):
             points = [] # empty the points array
@@ -275,6 +261,10 @@ while True:
             else:
                 display.graph(oldpoint, point, points, 0) #normal color
             resetflags()
+        elif(flags[2]):  # New icon triggers "nah Id win" screen
+            screenID = 5
+            clearscreen = True
+            resetflags()
 
     # Training Screen
     # [fb_add,fb_delete,fb_smallplay,fb_home]
@@ -284,8 +274,6 @@ while True:
                 playFlag = True
                 savetofile(points)
                 shakemotor(point)
-                #screenID=2 # trigger play screen
-                #uppressed(count=4)
             else:
                 cleardatafile()
                 display.showmessage("NO DATA")
@@ -317,6 +305,14 @@ while True:
                 s.write_angle(point[1])
                 display.graph(oldpoint, point, points, 0) #normal color
             oldpoint = point
+
+    elif(screenID == 5):
+        display.fill(0)
+        display.showmessage("nah Id win")
+        # Return to homescreen on any button press
+        if any(flags):
+            resettohome()
+            resetflags()
 
     if clearscreen:
         display.fill(0)
