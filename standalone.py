@@ -40,7 +40,6 @@ def linear_regression_predict(data, point):
 
 ID = ubinascii.hexlify(machine.unique_id()).decode()
 
-# homescreen stays as is; training screen gets 4 icons
 numberofIcons = [len(icons.iconFrames[0])]  # homescreen icons
 numberofIcons += [4 if i == 1 else len(icons.iconFrames[i]) for i in range(1, len(icons.iconFrames))]
 
@@ -83,6 +82,27 @@ switch_up = Pin(10, Pin.IN)
 i2c = SoftI2C(scl=Pin(7), sda=Pin(6))
 display = icons.SSD1306_SMART(128, 64, i2c, switch_up)
 
+def draw_empty_icon(display, position, screenID):
+    # Draw a simple empty box as a placeholder for a missing icon
+    x = 16 + position * 32  # Example: icon spacing, tweak for your UI
+    y = 16
+    w = 24
+    h = 24
+    try:
+        display.rect(x, y, w, h, 1)  # Unfilled rectangle as placeholder
+    except Exception:
+        pass
+
+def safe_selector(screenID, selected_icon, previous_icon):
+    try:
+        frames = icons.iconFrames
+        if screenID < len(frames) and selected_icon < len(frames[screenID]):
+            display.selector(screenID, selected_icon, previous_icon)
+        else:
+            draw_empty_icon(display, selected_icon, screenID)
+    except Exception:
+        draw_empty_icon(display, selected_icon, screenID)
+
 def downpressed(count=-1):
     global playFlag, triggered
     playFlag = False
@@ -102,7 +122,7 @@ def uppressed(count=1):
 def displayselect(selectedIcon):
     global screenID, highlightedIcon, lastPressed, previousIcon
     highlightedIcon[screenID][0] = (highlightedIcon[screenID][0] + selectedIcon) % highlightedIcon[screenID][1]
-    display.selector(screenID, highlightedIcon[screenID][0], previousIcon)
+    safe_selector(screenID, highlightedIcon[screenID][0], previousIcon)
     previousIcon = highlightedIcon[screenID][0]
     lastPressed = time.ticks_ms()
 
@@ -121,7 +141,7 @@ def resettohome():
             highlightedIcon[idx] = [0, numberofIcon]
         else:
             highlightedIcon.append([0, numberofIcon])
-    display.selector(screenID, highlightedIcon[screenID][0], 0)
+    safe_selector(screenID, highlightedIcon[screenID][0], 0)
     clearscreen = True
 
 def check_switch(p):
@@ -189,7 +209,7 @@ batt = Timer(1)
 batt.init(period=3000, mode=Timer.PERIODIC, callback=displaybatt)
 
 display.welcomemessage()
-display.selector(screenID, highlightedIcon[screenID][0], -1)
+safe_selector(screenID, highlightedIcon[screenID][0], -1)
 oldpoint = [-1, -1]
 
 while True:
@@ -259,5 +279,5 @@ while True:
             resetflags()
     if clearscreen:
         display.fill(0)
-        display.selector(screenID, highlightedIcon[screenID][0], -1)
+        safe_selector(screenID, highlightedIcon[screenID][0], -1)
         clearscreen = False
