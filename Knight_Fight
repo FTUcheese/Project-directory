@@ -1,0 +1,654 @@
+import copy
+import random
+import asyncio
+
+# ---- Required for OpenAI in PyScript ----
+try:
+    import pyodide_http
+    pyodide_http.patch_all()
+except ImportError:
+    pass
+
+def write_to(element_id, html, append=False):
+    from js import document
+    el = document.getElementById(element_id)
+    if el is not None:
+        if append:
+            el.innerHTML = el.innerHTML + html
+        else:
+            el.innerHTML = html
+
+battle = None  # GLOBAL battle variable for all functions
+manual_swap_pending = None  # (player_num, slot_idx) or None
+BOT_ACTIVE = False
+
+# == Game Data (minimal demo version, add more as needed) ==
+class Move:
+    def __init__(self, name, faction, power, accuracy=100, description=""):
+        self.name = name
+        self.faction = faction
+        self.power = power
+        self.accuracy = accuracy
+        self.description = description
+
+class Ability:
+    def __init__(self, name, faction, description):
+        self.name = name
+        self.faction = faction
+        self.description = description
+
+class KnightTemplate:
+    def __init__(self, name, faction, hp, attack, defense, speed, learnset):
+        self.name = name
+        self.faction = faction
+        self.base_stats = {'hp': hp, 'atk': attack, 'def': defense, 'spd': speed}
+        self.learnset = learnset
+
+ALL_ABILITIES = {
+    "Divine Power": Ability("Divine Power", "Radiant", "In Blazing Sun, Attack is boosted."),
+    "Bodyguard": Ability("Bodyguard", "Steel", "Redirects attacks from ally to this Knight."),
+    "Frozenheart": Ability("Frozenheart", "Cryo", "Heals in Hailstorm."),
+    "Last Stand": Ability("Last Stand", "Radiant", "1.5x damage when HP is low."),
+}
+ALL_MOVES = {
+    "Empowered Strike": Move("Empowered Strike", "Generic", 60, 85, "A powerful but less accurate blow."),
+    "Guard Bash": Move("Guard Bash", "Steel", 55, 90, "A headbutt that may daze."),
+    "Blazing Judgment": Move("Blazing Judgment", "Radiant", 80, 90, "Absorbs light, then fires."),
+    "Sunfire Burst": Move("Sunfire Burst", "Radiant", 70, 100, "Blast of fire."),
+    "Consecration": Move("Consecration", "Radiant", 0, 100, "Special."),
+    "Sacred Blade": Move("Sacred Blade", "Radiant", 45, 100, "Sword strike."),
+    "Heavenly Blessing": Move("Heavenly Blessing", "Radiant", 0, 100, "Heals an ally."),
+    "Blaze of Fury": Move("Blaze of Fury", "Radiant", 85, 100, "Fiery charge."),
+    "Fiery Immolation": Move("Fiery Immolation", "Radiant", 60, 100, "Burst of fire."),
+    "Phalanx": Move("Phalanx", "Steel", 0, 100, "Gain Guard if ally is Steel."),
+    "Crucible of Metal": Move("Crucible of Metal", "Steel", 0, 100, "Summon Metalstorm."),
+    "Frozen Slash": Move("Frozen Slash", "Cryo", 30, 90, "Slows the target."),
+    "Avalanche": Move("Avalanche", "Cryo", 60, 90, "Power doubles if hit this turn."),
+    "Blizzard": Move("Blizzard", "Cryo", 0, 100, "Summons hailstorm."),
+    "Rimefall": Move("Rimefall", "Cryo", 80, 70, "Snowstorm."),
+    "Storm's Wrath": Move("Storm's Wrath", "Storm", 70, 100, "Strong electrical attack."),
+    "Galvanic Charge": Move("Galvanic Charge", "Storm", 80, 100, "Tackle with recoil."),
+    "Unleash The Tempest": Move("Unleash The Tempest", "Storm", 75, 100, "Rampages."),
+    "Static Discharge": Move("Static Discharge", "Storm", 55, 90, "Hits all foes."),
+    "Onslaught Of Thorns": Move("Onslaught Of Thorns", "Verdant", 70, 80, "Lash of thorns."),
+    "Leeching Grasp": Move("Leeching Grasp", "Verdant", 50, 100, "Heals the user."),
+    "Vine Whip": Move("Vine Whip", "Verdant", 40, 100, "Quick whip."),
+}
+ALL_KNIGHTS = {
+    "Aegis": KnightTemplate("Aegis", "Steel", 250, 40, 70, 30, ["Empowered Strike", "Guard Bash", "Phalanx", "Crucible of Metal"]),
+    "Briarheart": KnightTemplate("Briarheart", "Verdant", 180, 60, 35, 50, ["Onslaught Of Thorns", "Leeching Grasp", "Vine Whip"]),
+    "Sol": KnightTemplate("Sol", "Radiant", 195, 58, 40, 60, ["Sacred Blade", "Blazing Judgment", "Sunfire Burst", "Consecration", "Heavenly Blessing"]),
+    "Boreas": KnightTemplate("Boreas", "Cryo", 220, 40, 60, 40, ["Frozen Slash", "Avalanche", "Blizzard", "Rimefall"]),
+    "Indra": KnightTemplate("Indra", "Storm", 185, 60, 38, 80, ["Unleash The Tempest", "Static Discharge", "Storm's Wrath", "Galvanic Charge"]),
+}
+CO_TEAM = [
+    {"template": "Sol", "custom_name": "Helios", "stats": {"hp": 195, "atk": 88, "def": 40, "spd": 70}, "ability": "Divine Power", "moves": ["Blazing Judgment", "Sunfire Burst", "Consecration", "Sacred Blade", "Heavenly Blessing"]},
+    {"template": "Sol", "custom_name": "Apollo", "stats": {"hp": 195, "atk": 98, "def": 40, "spd": 60}, "ability": "Last Stand", "moves": ["Sacred Blade", "Blaze of Fury", "Fiery Immolation", "Heavenly Blessing", "Empowered Strike"]},
+    {"template": "Briarheart", "custom_name": "Thorn", "stats": {"hp": 180, "atk": 90, "def": 45, "spd": 60}, "ability": "Piercing Thorns", "moves": ["Onslaught Of Thorns", "Leeching Grasp", "Vine Whip", "Empowered Strike", "Guard Bash"]},
+    {"template": "Briarheart", "custom_name": "Root", "stats": {"hp": 200, "atk": 70, "def": 55, "spd": 50}, "ability": "Relentless Growth", "moves": ["Onslaught Of Thorns", "Leeching Grasp", "Vine Whip", "Empowered Strike", "Guard Bash"]},
+    {"template": "Indra", "custom_name": "Tempest", "stats": {"hp": 185, "atk": 90, "def": 38, "spd": 90}, "ability": "Tempest Champion", "moves": ["Storm's Wrath", "Galvanic Charge", "Unleash The Tempest", "Static Discharge", "Empowered Strike"]},
+    {"template": "Aegis", "custom_name": "Guardian", "stats": {"hp": 270, "atk": 40, "def": 90, "spd": 30}, "ability": "Bodyguard", "moves": ["Phalanx", "Guard Bash", "Empowered Strike", "Crucible of Metal", "Guard Bash"]},
+]
+UG_TEAM = [
+    {"template": "Aegis", "custom_name": "Bastion", "stats": {"hp": 260, "atk": 50, "def": 80, "spd": 40}, "ability": "Bodyguard", "moves": ["Phalanx", "Guard Bash", "Empowered Strike", "Crucible of Metal", "Guard Bash"]},
+    {"template": "Aegis", "custom_name": "Rampart", "stats": {"hp": 250, "atk": 70, "def": 80, "spd": 30}, "ability": "Reinforced", "moves": ["Empowered Strike", "Guard Bash", "Phalanx", "Crucible of Metal", "Guard Bash"]},
+    {"template": "Boreas", "custom_name": "Winter", "stats": {"hp": 230, "atk": 40, "def": 80, "spd": 60}, "ability": "Frozenheart", "moves": ["Frozen Slash", "Avalanche", "Blizzard", "Rimefall", "Empowered Strike"]},
+    {"template": "Boreas", "custom_name": "Glacier", "stats": {"hp": 240, "atk": 40, "def": 90, "spd": 40}, "ability": "Frozenheart", "moves": ["Frozen Slash", "Avalanche", "Blizzard", "Rimefall", "Empowered Strike"]},
+    {"template": "Indra", "custom_name": "Gale", "stats": {"hp": 185, "atk": 80, "def": 38, "spd": 100}, "ability": "Grounded", "moves": ["Storm's Wrath", "Galvanic Charge", "Unleash The Tempest", "Static Discharge", "Empowered Strike"]},
+    {"template": "Briarheart", "custom_name": "Hex", "stats": {"hp": 190, "atk": 65, "def": 40, "spd": 85}, "ability": "Witch Doctor", "moves": ["Onslaught Of Thorns", "Leeching Grasp", "Vine Whip", "Empowered Strike", "Guard Bash"]},
+]
+TEAMS = {"co": CO_TEAM, "ug": UG_TEAM}
+
+class Knight:
+    def __init__(self, custom_data):
+        template = ALL_KNIGHTS[custom_data['template']]
+        self.name = custom_data['custom_name']
+        self.faction = template.faction
+        self.base_stats = custom_data['stats']
+        self.ability = ALL_ABILITIES.get(custom_data['ability'], Ability("Unknown", "Generic", ""))
+        self.moves = [ALL_MOVES[m] for m in custom_data['moves'] if m in ALL_MOVES]
+        self.hp = self.base_stats['hp']
+        self.max_hp = self.base_stats['hp']
+        self.is_fainted = False
+
+    def attack_move(self, move, target):
+        if move.power > 0:
+            damage = max(1, int((move.power + self.base_stats['atk'] - target.base_stats['def']) * (move.accuracy / 100)))
+            target.hp -= damage
+            if target.hp <= 0:
+                target.hp = 0
+                target.is_fainted = True
+            return f"{self.name} uses {move.name}! {target.name} takes {damage} damage."
+        else:
+            return f"{self.name} uses {move.name}! (Status effect)"
+
+    def display_status(self):
+        return f"{self.name} ({self.hp}/{self.max_hp} HP) [{self.faction}]"
+
+class Player:
+    def __init__(self, name, team):
+        self.name = name
+        self.team = team
+        self.active_knights = [None, None]  # Always 2
+    def has_living_knights(self):
+        return any(not k.is_fainted for k in self.team)
+    def get_bench(self):
+        return [k for k in self.team if (k not in self.active_knights) and not k.is_fainted]
+    def can_fill_slots(self):
+        return sum(1 for k in self.get_bench()) + sum(1 for k in self.active_knights if k and not k.is_fainted) >= 2
+
+class Battle:
+    def __init__(self, player1, player2, bot_active=False):
+        global battle
+        self.p1 = player1
+        self.p2 = player2
+        self.bot_active = bot_active
+        self.turn_stage = "switch"  # "switch", "move", or "target"
+        self.switch_pending = {1: [], 2: []}
+        self.move_pending = {1: [None, None], 2: [None, None]}  # Which move idx for each active knight
+        self.target_pending = {1: [None, None], 2: [None, None]}  # Target Knight object for each
+        self.swap_pending = {1: [None, None], 2: [None, None]}  # which bench knight to swap in per slot, or None
+        self.log = []
+        self.turn = 1
+        self.battle_over = False
+        self.target_stage = False
+        self.prompt_switch_in()
+
+    def prompt_switch_in(self):
+        global battle
+        self.turn_stage = "switch"
+        self.target_stage = False
+        for pnum, player in [(1, self.p1), (2, self.p2)]:
+            self.switch_pending[pnum] = []
+            for idx in range(2):
+                if (player.active_knights[idx] is None) or (player.active_knights[idx] and player.active_knights[idx].is_fainted):
+                    self.switch_pending[pnum].append(idx)
+        update_move_select()
+        if self.bot_active:
+            asyncio.ensure_future(bot_do_switches(self))
+
+    def receive_switch_in(self, pnum, slot_idx, knight_idx):
+        global battle
+        player = self.p1 if pnum == 1 else self.p2
+        bench = player.get_bench()
+        knight = bench[knight_idx]
+        player.active_knights[slot_idx] = knight
+        # Only remove slot_idx if it's actually in switch_pending[pnum]
+        if slot_idx in self.switch_pending[pnum]:
+            self.switch_pending[pnum].remove(slot_idx)
+        if not self.switch_pending[1] and not self.switch_pending[2]:
+            self.turn_stage = "move"
+            self.move_pending = {1: [None, None], 2: [None, None]}
+            self.swap_pending = {1: [None, None], 2: [None, None]}
+            self.target_pending = {1: [None, None], 2: [None, None]}
+            self.target_stage = False
+        update_ui()
+        update_move_select()
+        if self.bot_active and self.turn_stage == "move":
+            asyncio.ensure_future(bot_do_moves_and_targets(self))
+
+    def receive_move_choice(self, pnum, slot_idx, move_idx):
+        global battle
+        self.move_pending[pnum][slot_idx] = move_idx
+        all_ready = all(m is not None for m in self.move_pending[1]) and all(m is not None for m in self.move_pending[2])
+        if all_ready:
+            # Check if any move needs a target
+            need_targets = False
+            for p in [1, 2]:
+                for i in range(2):
+                    k = (self.p1 if p == 1 else self.p2).active_knights[i]
+                    m_idx = self.move_pending[p][i]
+                    if k and not k.is_fainted and m_idx is not None and m_idx != "swap":
+                        move = k.moves[m_idx]
+                        if move.power > 0:
+                            need_targets = True
+            if need_targets:
+                self.target_pending = {1: [None, None], 2: [None, None]}
+                self.target_stage = True
+                update_move_select()
+                if self.bot_active:
+                    asyncio.ensure_future(bot_do_moves_and_targets(self))
+            else:
+                self.target_stage = False
+                self.resolve_turn()
+        else:
+            update_move_select()
+            if self.bot_active and self.turn_stage == "move":
+                asyncio.ensure_future(bot_do_moves_and_targets(self))
+
+    def receive_target_choice(self, pnum, slot_idx, target_idx):
+        opponent = self.p2 if pnum == 1 else self.p1
+        valid_targets = [k for k in opponent.active_knights if k and not k.is_fainted]
+        if 0 <= target_idx < len(valid_targets):
+            self.target_pending[pnum][slot_idx] = valid_targets[target_idx]
+        # Check if all needed targets have been picked
+        all_ready = True
+        for p in [1, 2]:
+            for i in range(2):
+                k = (self.p1 if p == 1 else self.p2).active_knights[i]
+                m_idx = self.move_pending[p][i]
+                if k and not k.is_fainted and m_idx is not None and m_idx != "swap":
+                    move = k.moves[m_idx]
+                    if move.power > 0 and self.target_pending[p][i] is None:
+                        all_ready = False
+        if all_ready:
+            self.target_stage = False
+            self.resolve_turn()
+        else:
+            update_move_select()
+            if self.bot_active and self.turn_stage == "target":
+                asyncio.ensure_future(bot_do_moves_and_targets(self))
+
+    def resolve_turn(self):
+        global battle
+        p1 = self.p1
+        p2 = self.p2
+
+        # --- Step 1: Prepare swap info for the turn ---
+        swaps = []
+        swap_outs = {}   # (player_num, slot_idx) -> (old_knight, incoming_knight)
+        for pnum, player in [(1, p1), (2, p2)]:
+            for i in range(2):
+                if self.move_pending[pnum][i] == "swap" and self.swap_pending[pnum][i] is not None:
+                    active = player.active_knights[i]
+                    speed = active.base_stats['spd'] if active else 0
+                    swaps.append((speed, 0 if pnum==1 else 1, pnum, i, self.swap_pending[pnum][i]))
+        swaps.sort(reverse=True)
+
+        # Record who is swapping out/in
+        for _, _, pnum, slot_idx, bench_idx in swaps:
+            player = self.p1 if pnum == 1 else self.p2
+            bench = player.get_bench()
+            if 0 <= bench_idx < len(bench):
+                swapped_out = player.active_knights[slot_idx]
+                incoming = bench[bench_idx]
+                swap_outs[(pnum, slot_idx)] = (swapped_out, incoming)
+
+        # --- Step 2: Do the actual swaps in speed order ---
+        for _, _, pnum, slot_idx, bench_idx in swaps:
+            player = self.p1 if pnum == 1 else self.p2
+            bench = player.get_bench()
+            if 0 <= bench_idx < len(bench):
+                swapped_out = player.active_knights[slot_idx]
+                player.active_knights[slot_idx] = bench[bench_idx]
+                self.log.append(f"{swapped_out.name} swapped out! {player.active_knights[slot_idx].name} enters the field!")
+
+        # --- Step 3: Now resolve moves for knights who didn't swap ---
+        actions = []
+        for i in range(2):
+            k = p1.active_knights[i]
+            if k and not k.is_fainted and self.move_pending[1][i] != "swap" and self.move_pending[1][i] is not None:
+                m_idx = self.move_pending[1][i]
+                if isinstance(m_idx, int) and m_idx < len(k.moves):
+                    t = self.target_pending[1][i] if hasattr(self, 'target_pending') and self.target_pending[1][i] else (p2.active_knights[i] if p2.active_knights[i] and not p2.active_knights[i].is_fainted else None)
+                    actions.append((k, k.moves[m_idx], t, (2, i)))
+        for i in range(2):
+            k = p2.active_knights[i]
+            if k and not k.is_fainted and self.move_pending[2][i] != "swap" and self.move_pending[2][i] is not None:
+                m_idx = self.move_pending[2][i]
+                if isinstance(m_idx, int) and m_idx < len(k.moves):
+                    t = self.target_pending[2][i] if hasattr(self, 'target_pending') and self.target_pending[2][i] else (p1.active_knights[i] if p1.active_knights[i] and not p1.active_knights[i].is_fainted else None)
+                    actions.append((k, k.moves[m_idx], t, (1, i)))
+        actions.sort(key=lambda x: (-x[0].base_stats['spd'], 0 if x[0] in p1.active_knights else 1))
+
+        for attacker, move, defender, target_slot in actions:
+            # Was the defender swapped this turn?
+            if defender:
+                key = target_slot
+                if key in swap_outs:
+                    defender = swap_outs[key][1]  # The swapped-in knight
+                    self.log.append(f"{attacker.name}'s attack targets the incoming {defender.name} instead!")
+            if attacker.is_fainted or (defender and defender.is_fainted):
+                continue
+            if defender:
+                msg = attacker.attack_move(move, defender)
+                self.log.append(msg)
+                if defender.is_fainted:
+                    self.log.append(f"{defender.name} has fainted!")
+        # Remove fainted and refresh UI
+        fainted_flag = False
+        for player in [p1, p2]:
+            for idx in range(2):
+                if player.active_knights[idx] and player.active_knights[idx].is_fainted:
+                    player.active_knights[idx] = None
+                    fainted_flag = True
+        if fainted_flag:
+            update_ui()
+            update_move_select()
+        self.turn += 1
+        self.check_battle_over()
+        if self.battle_over:
+            update_ui()
+            update_move_select()
+            return
+
+        # Does anyone need to switch in?
+        need_switch = False
+        for player, pnum in [(self.p1, 1), (self.p2, 2)]:
+            for idx in range(2):
+                if player.active_knights[idx] is None:
+                    need_switch = True
+        if need_switch:
+            self.prompt_switch_in()
+        else:
+            self.turn_stage = "move"
+            self.move_pending = {1: [None, None], 2: [None, None]}
+            self.swap_pending = {1: [None, None], 2: [None, None]}
+            self.target_pending = {1: [None, None], 2: [None, None]}
+            self.target_stage = False
+            update_ui()
+            update_move_select()
+            if self.bot_active:
+                asyncio.ensure_future(bot_do_moves_and_targets(self))
+
+    def check_battle_over(self):
+        global battle
+        if not self.p1.has_living_knights():
+            self.log.append("<span style='color:#FFD700;font-size:1.2em;'>Player 2 wins!</span>")
+            self.battle_over = True
+        elif not self.p2.has_living_knights():
+            self.log.append("<span style='color:#FFD700;font-size:1.2em;'>Player 1 wins!</span>")
+            self.battle_over = True
+
+    def get_log(self):
+        return "<br>".join(self.log[-12:])
+
+# -------- UI and GAME HELPERS (unchanged from last version) --------
+def bench_knight_block(knight):
+    if not knight:
+        return '<div style="margin:4px 0;">[Empty]</div>'
+    color = "#FFD700" if knight.hp > 0 else "#555"
+    hp_ratio = max(0.05, knight.hp / knight.max_hp)
+    bar = (
+        f'<div style="background:#444;width:80px;height:12px;display:inline-block;border-radius:6px;">'
+        f'<div style="background:{color};height:12px;width:{int(80*hp_ratio)}px;border-radius:6px;"></div></div>'
+    )
+    return (
+        f'<div style="margin:6px 0 10px 0;">'
+        f'<b>{knight.name}</b> [{knight.faction}]<br>{knight.hp}/{knight.max_hp} HP<br>{bar}</div>'
+    )
+
+def bench_grid_html(bench_knights):
+    blocks = [bench_knight_block(k) for k in bench_knights]
+    while len(blocks) < 6:
+        blocks.append('<div style="margin:6px 0 10px 0; color:#444;">[Empty]</div>')
+    grid = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">'
+    for i in range(6):
+        grid += blocks[i]
+    grid += '</div>'
+    return grid
+
+def knight_block_with_swap(knight, pnum, slot_idx):
+    global battle
+    if not knight:
+        return '<div style="margin:4px 0;">[Empty]</div>'
+    color = "#FFD700" if knight.hp > 0 else "#555"
+    hp_ratio = max(0.05, knight.hp / knight.max_hp)
+    bar = f'<div style="background:#444;width:80px;height:12px;display:inline-block;border-radius:6px;"><div style="background:#FFD700;height:12px;width:{int(80*hp_ratio)}px;border-radius:6px;"></div></div>'
+    btn = ""
+    if pnum is not None and knight.hp > 0 and not battle.battle_over and battle.turn_stage == "move" and not battle.target_stage:
+        btn = f' <button onclick="prompt_swap({pnum},{slot_idx})" style="font-size:12px; padding:2px 7px; margin-left:7px; border-radius:6px;">Swap</button>'
+    return f'<div style="margin:6px 0 10px 0;"><b>{knight.name}</b> [{knight.faction}]<br>{knight.hp}/{knight.max_hp} HP<br>{bar}{btn}</div>'
+
+def update_ui():
+    global battle
+    p1a = "".join([knight_block_with_swap(k, 1, i) for i, k in enumerate(battle.p1.active_knights)])
+    write_to("p1-actives", p1a)
+    p2a = "".join([knight_block_with_swap(k, 2, i) for i, k in enumerate(battle.p2.active_knights)])
+    write_to("p2-actives", p2a)
+    p1b = bench_grid_html(battle.p1.get_bench())
+    write_to("p1-bench", p1b)
+    p2b = bench_grid_html(battle.p2.get_bench())
+    write_to("p2-bench", p2b)
+    write_to("battlefield", f"<div style='font-size:18px; font-weight:bold; margin:8px 0 4px 0;'>Turn {battle.turn}</div>")
+    write_to("log", battle.get_log())
+
+def update_move_select():
+    global battle, manual_swap_pending
+    ms_left = ""
+    ms_right = ""
+    if manual_swap_pending:
+        pnum, slot_idx = manual_swap_pending
+        player = battle.p1 if pnum == 1 else battle.p2
+        ms = f"<b>Choose a bench knight to swap with {player.active_knights[slot_idx].name}:</b><br>"
+        for idx, k in enumerate(player.get_bench()):
+            ms += f'<button onclick="do_manual_swap({pnum},{slot_idx},{idx})" style="margin:3px 7px 3px 0; min-width:110px;">{k.display_status()}</button>'
+        ms += '&nbsp;&nbsp;<button onclick="cancel_swap()" style="margin-left:15px;">Cancel</button>'
+        write_to("move-select", ms)
+        return
+    if not battle or battle.battle_over:
+        ms_left = "<b>Battle Over!</b>"
+        ms_right = ""
+    elif battle.turn_stage == "switch":
+        for slot in battle.switch_pending[1]:
+            ms_left += f"<b>P1: Choose a knight for slot {slot+1}:</b><br>"
+            for idx, k in enumerate(battle.p1.get_bench()):
+                ms_left += f'<button onclick="pick_switch(1,{slot},{idx})" style="margin:3px 7px 3px 0; min-width:110px;">{k.display_status()}</button> '
+            ms_left += "<br>"
+        for slot in battle.switch_pending[2]:
+            ms_right += f"<b>P2: Choose a knight for slot {slot+1}:</b><br>"
+            for idx, k in enumerate(battle.p2.get_bench()):
+                ms_right += f'<button onclick="pick_switch(2,{slot},{idx})" style="margin:3px 7px 3px 0; min-width:110px;">{k.display_status()}</button> '
+            ms_right += "<br>"
+    elif battle.target_stage:
+        for i in range(2):
+            k = battle.p1.active_knights[i]
+            m_idx = battle.move_pending[1][i]
+            if k and not k.is_fainted and m_idx is not None and m_idx != "swap" and battle.target_pending[1][i] is None:
+                ms_left += f"<b>P1 - {k.name}: Pick a target:</b><br>"
+                opponent = battle.p2
+                valid_targets = [kk for kk in opponent.active_knights if kk and not kk.is_fainted]
+                for t_idx, t in enumerate(valid_targets):
+                    ms_left += f'<button onclick="pick_target(1,{i},{t_idx})" style="min-width:110px;">{t.display_status()}</button> '
+                ms_left += "<br>"
+        for i in range(2):
+            k = battle.p2.active_knights[i]
+            m_idx = battle.move_pending[2][i]
+            if k and not k.is_fainted and m_idx is not None and m_idx != "swap" and battle.target_pending[2][i] is None:
+                ms_right += f"<b>P2 - {k.name}: Pick a target:</b><br>"
+                opponent = battle.p1
+                valid_targets = [kk for kk in opponent.active_knights if kk and not kk.is_fainted]
+                for t_idx, t in enumerate(valid_targets):
+                    ms_right += f'<button onclick="pick_target(2,{i},{t_idx})" style="min-width:110px;">{t.display_status()}</button> '
+                ms_right += "<br>"
+    elif battle.turn_stage == "move":
+        for i in range(2):
+            k = battle.p1.active_knights[i]
+            if battle.move_pending[1][i] == "swap":
+                ms_left += f"<b>P1 - {k.name} (slot {i+1}):</b> <span style='color:#B0E0E6'>Swapping...</span><br>"
+                continue
+            if k and not k.is_fainted and battle.move_pending[1][i] is None:
+                ms_left += f"<b>P1 - {k.name} (slot {i+1}):</b><br>"
+                for idx, m in enumerate(k.moves):
+                    ms_left += (
+                        f'<div style="margin-bottom:6px;display:flex;align-items:flex-start;">'
+                        f'<button onclick="pick_move(1,{i},{idx})" '
+                        f'style="min-width:120px;max-width:180px;overflow-wrap:break-word;white-space:normal;vertical-align:top;margin-right:8px;margin-bottom:2px;font-family:Garamond;">'
+                        f'{m.name}</button>'
+                        f'<span style="color:#C7FFDD; font-size:14px;word-break:break-word;line-height:1.3;">{m.description}</span>'
+                        f'</div>'
+                    )
+        for i in range(2):
+            k = battle.p2.active_knights[i]
+            if battle.move_pending[2][i] == "swap":
+                ms_right += f"<b>P2 - {k.name} (slot {i+1}):</b> <span style='color:#B0E0E6'>Swapping...</span><br>"
+                continue
+            if k and not k.is_fainted and battle.move_pending[2][i] is None:
+                ms_right += f"<b>P2 - {k.name} (slot {i+1}):</b><br>"
+                for idx, m in enumerate(k.moves):
+                    ms_right += (
+                        f'<div style="margin-bottom:6px;display:flex;align-items:flex-start;">'
+                        f'<button onclick="pick_move(2,{i},{idx})" '
+                        f'style="min-width:120px;max-width:180px;overflow-wrap:break-word;white-space:normal;vertical-align:top;margin-right:8px;margin-bottom:2px;font-family:Garamond;">'
+                        f'{m.name}</button>'
+                        f'<span style="color:#C7FFDD; font-size:14px;word-break:break-word;line-height:1.3;">{m.description}</span>'
+                        f'</div>'
+                    )
+    ms = (
+        '<div style="display:flex;flex-direction:row;justify-content:space-between;">'
+        f'<div style="width:48%;min-width:170px;margin-right:2%;">{ms_left}</div>'
+        f'<div style="width:48%;min-width:170px;">{ms_right}</div>'
+        '</div>'
+    )
+    write_to("move-select", ms)
+
+def pick_switch(pnum, slot_idx, knight_idx):
+    global battle
+    battle.receive_switch_in(pnum, slot_idx, knight_idx)
+    update_ui()
+    update_move_select()
+    return None
+
+def pick_move(pnum, slot_idx, move_idx):
+    global battle
+    battle.receive_move_choice(pnum, slot_idx, move_idx)
+    update_ui()
+    update_move_select()
+    return None
+
+def pick_target(pnum, slot_idx, target_idx):
+    global battle
+    battle.receive_target_choice(pnum, slot_idx, target_idx)
+    update_ui()
+    update_move_select()
+    return None
+
+def prompt_manual_swap(pnum, slot_idx):
+    global manual_swap_pending
+    manual_swap_pending = (pnum, slot_idx)
+    update_move_select()
+
+def cancel_swap():
+    global manual_swap_pending
+    manual_swap_pending = None
+    update_move_select()
+
+def do_manual_swap(pnum, slot_idx, knight_idx):
+    global manual_swap_pending, battle
+    player = battle.p1 if pnum == 1 else battle.p2
+    if battle.battle_over:
+        manual_swap_pending = None
+        return
+    bench = player.get_bench()
+    if 0 <= knight_idx < len(bench):
+        battle.swap_pending[pnum][slot_idx] = knight_idx
+        battle.move_pending[pnum][slot_idx] = "swap"
+        manual_swap_pending = None
+        battle.log.append(f"{player.active_knights[slot_idx].name} will swap out!")
+        update_ui()
+        update_move_select()
+
+import js
+def start_battle():
+    global battle, BOT_ACTIVE
+    from js import document
+    p1_team_val = document.getElementById("p1_team").value
+    p2_team_val = document.getElementById("p2_team").value
+    bot_on = bool(document.getElementById("p2_bot").checked)
+    BOT_ACTIVE = bot_on
+    team1 = [Knight(k) for k in copy.deepcopy(TEAMS[p1_team_val])]
+    team2 = [Knight(k) for k in copy.deepcopy(TEAMS[p2_team_val])]
+    player1 = Player("Player 1", team1)
+    player2 = Player("Player 2", team2)
+    battle = Battle(player1, player2, bot_active=bot_on)
+    update_ui()
+    update_move_select()
+    if BOT_ACTIVE:
+        asyncio.ensure_future(bot_do_switches(battle))
+
+# ==== BOT LOGIC: Uses OpenAI if API key provided, else random ====
+async def gpt_pick_move(knight, valid_targets, bench, moves):
+    from js import document
+    api_key = document.getElementById("gpt_api_key").value.strip()
+    if not api_key.startswith("sk-"):
+        move_idx = random.randint(0, len(moves)-1)
+        target_idx = random.randint(0, len(valid_targets)-1) if valid_targets else 0
+        return (move_idx, target_idx)
+    prompt = f"""
+Your knight: {knight.name} (HP: {knight.hp}/{knight.max_hp}), Faction: {knight.faction}
+Ability: {knight.ability.name} - {knight.ability.description}
+Moves: {', '.join([f"{i+1}. {m.name} ({m.description})" for i, m in enumerate(moves)])}
+Bench: {', '.join([k.name for k in bench])}
+Enemy actives: {', '.join([f"{t.name} ({t.hp} HP)" for t in valid_targets])}
+Pick a move (1-{len(moves)}) and target (1-{len(valid_targets)}). Only output two numbers, space separated. Example: '2 1'
+"""
+    import json
+    try:
+        from pyodide.http import pyfetch
+        body = json.dumps({
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": "You are a helpful, competitive monster-battling game AI. Only output your selected move and target as numbers, like '2 1'."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 16,
+            "temperature": 0.6
+        })
+        resp = await pyfetch(
+            url="https://api.openai.com/v1/chat/completions",
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            body=body
+        )
+        data = await resp.json()
+        txt = data["choices"][0]["message"]["content"].strip()
+        arr = [int(x)-1 for x in txt.replace(",", " ").split() if x.strip().isdigit()]
+        if len(arr) == 2:
+            move_idx, target_idx = arr
+            if move_idx in range(len(moves)) and target_idx in range(len(valid_targets)):
+                return (move_idx, target_idx)
+    except Exception as ex:
+        pass
+    move_idx = random.randint(0, len(moves)-1)
+    target_idx = random.randint(0, len(valid_targets)-1) if valid_targets else 0
+    return (move_idx, target_idx)
+
+async def bot_do_switches(battle):
+    while battle.switch_pending[2]:
+        slot = battle.switch_pending[2][0]
+        bench = battle.p2.get_bench()
+        pick = 0
+        await asyncio.sleep(0.3)
+        battle.receive_switch_in(2, slot, pick)
+        update_ui()
+        update_move_select()
+
+async def bot_do_moves_and_targets(battle):
+    await asyncio.sleep(0.2)
+    if battle.turn_stage == "move":
+        for i in range(2):
+            k = battle.p2.active_knights[i]
+            if k and not k.is_fainted and battle.move_pending[2][i] is None:
+                moves = k.moves
+                valid_targets = [x for x in battle.p1.active_knights if x and not x.is_fainted]
+                bench = battle.p2.get_bench()
+                move_idx, target_idx = await gpt_pick_move(k, valid_targets, bench, moves)
+                battle.receive_move_choice(2, i, move_idx)
+                update_ui()
+                update_move_select()
+    await asyncio.sleep(0.2)
+    if battle.target_stage:
+        for i in range(2):
+            k = battle.p2.active_knights[i]
+            m_idx = battle.move_pending[2][i]
+            if k and not k.is_fainted and m_idx is not None and m_idx != "swap" and battle.target_pending[2][i] is None:
+                valid_targets = [x for x in battle.p1.active_knights if x and not x.is_fainted]
+                moves = k.moves
+                bench = battle.p2.get_bench()
+                move_idx, target_idx = await gpt_pick_move(k, valid_targets, bench, moves)
+                battle.receive_target_choice(2, i, target_idx)
+                update_ui()
+                update_move_select()
+
+# ==== JS Export bindings ====
+import js
+js.globalThis.start_battle = start_battle
+js.globalThis.pick_switch = pick_switch
+js.globalThis.pick_move = pick_move
+js.globalThis.pick_target = pick_target
+js.globalThis.prompt_swap = prompt_manual_swap
+js.globalThis.do_manual_swap = do_manual_swap
+js.globalThis.cancel_swap = cancel_swap
